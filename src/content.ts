@@ -21,6 +21,14 @@ function calculateScore({ viewCount, likeCount, commentCount, publishedAt, subsc
   );
 }
 
+function calculateDetailedScore({ viewCount, likeCount, subscriberCount, hoursSinceUpload }: { viewCount: number, likeCount: number, subscriberCount: number, hoursSinceUpload: number }) {
+  // 예시: 조회수/시간 + 좋아요/10 + log(구독자수)*10
+  return (
+    (viewCount / (hoursSinceUpload + 1)) +
+    (likeCount / 10) +
+    (Math.log(subscriberCount || 1) * 10)
+  );
+}
 
 (async () => {
   const videoId = new URLSearchParams(window.location.search).get('v');
@@ -145,10 +153,53 @@ function initThresholdAndObserve() {
   });
 }
 
+function parseWatchPageAndShowDetailedScore() {
+  // 1. 조회수
+  const viewText = document.querySelector('.view-count, .yt-view-count-renderer')?.textContent || '';
+  const viewCount = parseViewCount(viewText);
+  // 2. 업로드 시간
+  const uploadText = document.querySelector('#info-strings yt-formatted-string, .date')?.textContent || '';
+  const hoursSinceUpload = parseUploadTime(uploadText);
+  // 3. 좋아요 수
+  let likeText = '';
+  // 유튜브 UI 실험에 따라 여러 케이스가 있음
+  const likeBtn = document.querySelector('ytd-toggle-button-renderer[is-icon-button][aria-label*="좋아요"]') || document.querySelector('ytd-toggle-button-renderer[is-icon-button]');
+  if (likeBtn) {
+    likeText = likeBtn.textContent || '';
+  } else {
+    // fallback: 좋아요 숫자만 있는 경우
+    likeText = document.querySelector('yt-formatted-string[aria-label*="좋아요"]')?.textContent || '';
+  }
+  const likeCount = parseViewCount(likeText);
+  // 4. 구독자 수
+  const subText = document.querySelector('#owner-sub-count, .yt-subscriber-count-renderer')?.textContent || '';
+  const subscriberCount = parseViewCount(subText);
+  // 5. 점수 계산
+  const detailedScore = calculateDetailedScore({ viewCount, likeCount, subscriberCount, hoursSinceUpload });
+  // 6. 영상 제목 아래에 표시
+  const titleElement = document.querySelector('#title h1, .title.ytd-video-primary-info-renderer');
+  if (titleElement && !document.getElementById('yt-detailed-score-badge')) {
+    const badge = document.createElement('div');
+    badge.innerText = `🔥 상세 점수: ${Math.round(detailedScore)}`;
+    badge.className = 'yt-score-badge';
+    badge.id = 'yt-detailed-score-badge';
+    titleElement.parentElement?.appendChild(badge);
+  }
+}
+
 if (
   window.location.pathname === '/' ||
   window.location.pathname === '/results' ||
   window.location.pathname === '/watch'
 ) {
   initThresholdAndObserve();
+  if (window.location.pathname === '/watch') {
+    // 상세 점수 표시
+    parseWatchPageAndShowDetailedScore();
+    // 동적 로딩 대응: MutationObserver로 상세 점수 배지 중복 생성 방지
+    const watchObserver = new MutationObserver(() => {
+      parseWatchPageAndShowDetailedScore();
+    });
+    watchObserver.observe(document.body, { childList: true, subtree: true });
+  }
 }
