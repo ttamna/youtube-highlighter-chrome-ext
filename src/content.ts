@@ -7,19 +7,9 @@ import { calcHotScore } from './utils/calcHotScore';
 
 let hotScoreThreshold = 5000;
 
-function calculateScore({ viewCount, likeCount, commentCount, publishedAt, subscriberCount }: { viewCount: number, likeCount: number, commentCount: number, publishedAt: string, subscriberCount: number }) {
-  const hoursSinceUpload = (Date.now() - new Date(publishedAt).getTime()) / 36e5;
-  const viewsPerHour = viewCount / hoursSinceUpload;
-  const likeRatio = likeCount / viewCount;
-  const commentRatio = commentCount / viewCount;
+// 1. 전역 observer 변수 선언
+let observer: MutationObserver | null = null;
 
-  return (
-    viewsPerHour * 1.5 +
-    likeRatio * 500 +
-    commentRatio * 200 +
-    Math.log(subscriberCount || 1) * 10
-  );
-}
 
 function calculateDetailedScore({ viewCount, likeCount, subscriberCount, hoursSinceUpload }: { viewCount: number, likeCount: number, subscriberCount: number, hoursSinceUpload: number }) {
   // 예시: 조회수/시간 + 좋아요/10 + log(구독자수)*10
@@ -29,42 +19,6 @@ function calculateDetailedScore({ viewCount, likeCount, subscriberCount, hoursSi
     (Math.log(subscriberCount || 1) * 10)
   );
 }
-
-(async () => {
-  const videoId = new URLSearchParams(window.location.search).get('v');
-  if (!videoId) return;
-
-  const apiKey = 'YOUR_YOUTUBE_API_KEY';
-
-  const videoRes = await fetch(
-    `https://www.googleapis.com/youtube/v3/videos?part=snippet,statistics&id=${videoId}&key=${apiKey}`
-  );
-  const videoData = (await videoRes.json()).items?.[0];
-  if (!videoData) return;
-
-  const channelId = videoData.snippet.channelId;
-  const channelRes = await fetch(
-    `https://www.googleapis.com/youtube/v3/channels?part=statistics&id=${channelId}&key=${apiKey}`
-  );
-  const channelData = (await channelRes.json()).items?.[0];
-
-  const score = calculateScore({
-    viewCount: +videoData.statistics.viewCount,
-    likeCount: +videoData.statistics.likeCount,
-    commentCount: +videoData.statistics.commentCount,
-    publishedAt: videoData.snippet.publishedAt,
-    subscriberCount: +channelData.statistics.subscriberCount,
-  });
-
-  // YouTube 제목 아래 삽입
-  const titleElement = document.querySelector('#title h1');
-  if (titleElement) {
-    const badge = document.createElement('div');
-    badge.innerText = `🔥 콘텐츠 점수: ${score.toFixed(1)}`;
-    badge.className = 'yt-score-badge';
-    titleElement.parentElement?.appendChild(badge);
-  }
-})();
 
 // YouTube 홈 추천 영상 카드 정보 파싱 (1차: 콘솔 출력)
 
@@ -86,37 +40,44 @@ function getVideoCards(): HTMLElement[] {
 }
 
 function extractVideoInfo(card: HTMLElement) {
-  const titleEl = card.querySelector('#video-title') || card.querySelector('.yt-lockup-metadata-view-model-wiz__title');
-  const title = titleEl?.textContent?.trim() || '';
-  let viewText = '';
-  let uploadText = '';
-  if (card.matches('yt-lockup-view-model')) {
-    const rows = card.querySelectorAll('.yt-content-metadata-view-model-wiz__metadata-row');
-    if (rows.length > 1) {
-      const metaSpans = rows[1].querySelectorAll('span');
-      viewText = metaSpans[0]?.textContent?.trim() || '';
-      uploadText = metaSpans[2]?.textContent?.trim() || '';
+  try {
+    const titleEl = card.querySelector('#video-title') || card.querySelector('.yt-lockup-metadata-view-model-wiz__title');
+    const title = titleEl?.textContent?.trim() || '';
+    let viewText = '';
+    let uploadText = '';
+    if (card.matches('yt-lockup-view-model')) {
+      const rows = card.querySelectorAll('.yt-content-metadata-view-model-wiz__metadata-row');
+      if (rows.length > 1) {
+        const metaSpans = rows[1].querySelectorAll('span');
+        viewText = metaSpans[0]?.textContent?.trim() || '';
+        uploadText = metaSpans[2]?.textContent?.trim() || '';
+      }
+    } else {
+      const viewEl = card.querySelector('#metadata-line span');
+      viewText = viewEl?.textContent?.trim() || '';
+      const timeEls = card.querySelectorAll('#metadata-line span');
+      uploadText = timeEls.length > 1 ? timeEls[1].textContent?.trim() || '' : '';
     }
-  } else {
-    const viewEl = card.querySelector('#metadata-line span');
-    viewText = viewEl?.textContent?.trim() || '';
-    const timeEls = card.querySelectorAll('#metadata-line span');
-    uploadText = timeEls.length > 1 ? timeEls[1].textContent?.trim() || '' : '';
+    let viewCount = parseViewCount(viewText);
+    let hoursSinceUpload = parseUploadTime(uploadText);
+    if (isNaN(viewCount)) viewCount = 0;
+    if (isNaN(hoursSinceUpload)) hoursSinceUpload = 0;
+    const url = (titleEl as HTMLAnchorElement)?.href || '';
+    const thumbEl = card.querySelector('img');
+    const thumbnail = thumbEl?.src || '';
+    let hotScore = calcHotScore(viewCount, hoursSinceUpload);
+    if (isNaN(hotScore)) hotScore = 0;
+    return { title, viewText, viewCount, uploadText, hoursSinceUpload, url, thumbnail, hotScore };
+  } catch (e) {
+    return { error: true, message: (e as Error).message, card };
   }
-  const viewCount = parseViewCount(viewText);
-  const hoursSinceUpload = parseUploadTime(uploadText);
-  const url = (titleEl as HTMLAnchorElement)?.href || '';
-  const thumbEl = card.querySelector('img');
-  const thumbnail = thumbEl?.src || '';
-  const hotScore = calcHotScore(viewCount, hoursSinceUpload);
-  return { title, viewText, viewCount, uploadText, hoursSinceUpload, url, thumbnail, hotScore };
 }
 
 function highlightHotVideos() {
   const cards = getVideoCards();
   cards.forEach(card => {
     const info = extractVideoInfo(card);
-    if (info.hotScore >= hotScoreThreshold) {
+    if (typeof info.hotScore === 'number' && info.hotScore >= hotScoreThreshold) {
       card.classList.add('yt-hot-highlight');
     } else {
       card.classList.remove('yt-hot-highlight');
@@ -127,23 +88,46 @@ function highlightHotVideos() {
 function logAllVideoInfos() {
   const cards = getVideoCards();
   const infos = cards.map(extractVideoInfo);
-  console.log('[YouTube Highlighter] 추천/검색/사이드 영상 정보:', infos);
+  const errorInfos = infos.filter(info => (info as any).error);
+  const validInfos = infos.filter(info => !(info as any).error);
+  if (errorInfos.length > 0) {
+    console.warn('[YouTube Highlighter] 파싱 에러:', errorInfos);
+  }
+  console.log('[YouTube Highlighter] 추천/검색/사이드 영상 정보:', validInfos);
 }
 
 function observeAndHighlight() {
+  // 기존 옵저버 해제
+  if (observer) observer.disconnect();
   highlightHotVideos();
   logAllVideoInfos();
-  const observer = new MutationObserver(() => {
+  observer = new MutationObserver(() => {
     highlightHotVideos();
     logAllVideoInfos();
   });
   observer.observe(document.body, { childList: true, subtree: true });
 }
 
+function cleanupObserver() {
+  if (observer) {
+    observer.disconnect();
+    observer = null;
+  }
+}
+
 function initThresholdAndObserve() {
   chrome.storage.sync.get({ hotScoreThreshold: 5000 }, (items: { hotScoreThreshold: number }) => {
     hotScoreThreshold = items.hotScoreThreshold;
-    observeAndHighlight();
+    // 홈/검색/재생에서 옵저버 활성화
+    if (
+      window.location.pathname === '/' ||
+      window.location.pathname === '/results' ||
+      window.location.pathname === '/watch'
+    ) {
+      observeAndHighlight();
+    } else {
+      cleanupObserver();
+    }
   });
   chrome.storage.onChanged.addListener((changes: any, area: string) => {
     if (area === 'sync' && changes.hotScoreThreshold) {
@@ -162,12 +146,10 @@ function parseWatchPageAndShowDetailedScore() {
   const hoursSinceUpload = parseUploadTime(uploadText);
   // 3. 좋아요 수
   let likeText = '';
-  // 유튜브 UI 실험에 따라 여러 케이스가 있음
   const likeBtn = document.querySelector('ytd-toggle-button-renderer[is-icon-button][aria-label*="좋아요"]') || document.querySelector('ytd-toggle-button-renderer[is-icon-button]');
   if (likeBtn) {
     likeText = likeBtn.textContent || '';
   } else {
-    // fallback: 좋아요 숫자만 있는 경우
     likeText = document.querySelector('yt-formatted-string[aria-label*="좋아요"]')?.textContent || '';
   }
   const likeCount = parseViewCount(likeText);
@@ -176,15 +158,37 @@ function parseWatchPageAndShowDetailedScore() {
   const subscriberCount = parseViewCount(subText);
   // 5. 점수 계산
   const detailedScore = calculateDetailedScore({ viewCount, likeCount, subscriberCount, hoursSinceUpload });
-  // 6. 영상 제목 아래에 표시
+  // 6. 영상 제목 아래에 표시 (배지 갱신)
+  const badgeId = 'yt-detailed-score-badge';
   const titleElement = document.querySelector('#title h1, .title.ytd-video-primary-info-renderer');
-  if (titleElement && !document.getElementById('yt-detailed-score-badge')) {
-    const badge = document.createElement('div');
+  if (titleElement) {
+    let badge = document.getElementById(badgeId);
+    if (!badge) {
+      badge = document.createElement('div');
+      badge.className = 'yt-score-badge';
+      badge.id = badgeId;
+      titleElement.parentElement?.appendChild(badge);
+    }
     badge.innerText = `🔥 상세 점수: ${Math.round(detailedScore)}`;
-    badge.className = 'yt-score-badge';
-    badge.id = 'yt-detailed-score-badge';
-    titleElement.parentElement?.appendChild(badge);
   }
+}
+
+// [본 영상 점수 배지] 별도 setInterval로 #title h1 등 메인 영상 정보만 주기적으로 갱신
+function startMainVideoScoreInterval() {
+  let lastMainVideoId = '';
+  setInterval(() => {
+    // 본 영상 videoId 추출 (URL 파라미터 v)
+    const videoId = new URLSearchParams(window.location.search).get('v') || '';
+    if (window.location.pathname === '/watch') {
+      if (videoId !== lastMainVideoId) {
+        lastMainVideoId = videoId;
+        // 새 영상 진입 시 즉시 갱신
+        parseWatchPageAndShowDetailedScore();
+      }
+      // 항상 주기적으로 갱신 (DOM 변화 대응)
+      parseWatchPageAndShowDetailedScore();
+    }
+  }, 1000);
 }
 
 if (
@@ -194,12 +198,7 @@ if (
 ) {
   initThresholdAndObserve();
   if (window.location.pathname === '/watch') {
-    // 상세 점수 표시
-    parseWatchPageAndShowDetailedScore();
-    // 동적 로딩 대응: MutationObserver로 상세 점수 배지 중복 생성 방지
-    const watchObserver = new MutationObserver(() => {
-      parseWatchPageAndShowDetailedScore();
-    });
-    watchObserver.observe(document.body, { childList: true, subtree: true });
+    // 상세 점수 배지 별도 setInterval로 관리 (추천영상 하이라이트와 분리)
+    startMainVideoScoreInterval();
   }
 }
