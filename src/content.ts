@@ -60,36 +60,36 @@ function calculateScore({ viewCount, likeCount, commentCount, publishedAt, subsc
 
 // YouTube 홈 추천 영상 카드 정보 파싱 (1차: 콘솔 출력)
 
-function getVideoCards(): NodeListOf<HTMLElement> {
-  // YouTube 홈에서 추천 영상 카드는 ytd-rich-item-renderer로 감싸짐
-  return document.querySelectorAll('ytd-rich-item-renderer');
+function getVideoCards(): HTMLElement[] {
+  if (window.location.pathname === '/') {
+    // 홈: ytd-rich-item-renderer
+    return Array.from(document.querySelectorAll('ytd-rich-item-renderer'));
+  } else if (window.location.pathname === '/results') {
+    // 검색: ytd-video-renderer
+    return Array.from(document.querySelectorAll('ytd-video-renderer'));
+  }
+  return [];
 }
 
 function extractVideoInfo(card: HTMLElement) {
-  // 제목
   const titleEl = card.querySelector('#video-title');
   const title = titleEl?.textContent?.trim() || '';
-  // 조회수
   const viewEl = card.querySelector('#metadata-line span');
   const viewText = viewEl?.textContent?.trim() || '';
   const viewCount = parseViewCount(viewText);
-  // 업로드 시간
   const timeEls = card.querySelectorAll('#metadata-line span');
   const uploadText = timeEls.length > 1 ? timeEls[1].textContent?.trim() || '' : '';
   const hoursSinceUpload = parseUploadTime(uploadText);
-  // URL
   const url = (titleEl as HTMLAnchorElement)?.href || '';
-  // 썸네일
   const thumbEl = card.querySelector('img');
   const thumbnail = thumbEl?.src || '';
-  // 핫 점수
   const hotScore = calcHotScore(viewCount, hoursSinceUpload);
   return { title, viewText, viewCount, uploadText, hoursSinceUpload, url, thumbnail, hotScore };
 }
 
 function highlightHotVideos() {
   const cards = getVideoCards();
-  Array.from(cards).forEach(card => {
+  cards.forEach(card => {
     const info = extractVideoInfo(card);
     if (info.hotScore >= hotScoreThreshold) {
       card.classList.add('yt-hot-highlight');
@@ -101,11 +101,10 @@ function highlightHotVideos() {
 
 function logAllVideoInfos() {
   const cards = getVideoCards();
-  const infos = Array.from(cards).map(extractVideoInfo);
-  console.log('[YouTube Highlighter] 추천 영상 정보:', infos);
+  const infos = cards.map(extractVideoInfo);
+  console.log('[YouTube Highlighter] 추천/검색 영상 정보:', infos);
 }
 
-// 최초 실행 및 동적 로딩 대응 (간단히 MutationObserver)
 function observeAndHighlight() {
   highlightHotVideos();
   logAllVideoInfos();
@@ -129,6 +128,6 @@ function initThresholdAndObserve() {
   });
 }
 
-if (window.location.pathname === '/') {
+if (window.location.pathname === '/' || window.location.pathname === '/results') {
   initThresholdAndObserve();
 }
